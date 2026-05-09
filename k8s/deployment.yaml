@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: sample-ci-cd-app
-          image: kattanaresh/sample-ci-cd-app:v50
+          image: kattanaresh/sample-ci-cd-app:v51
           ports:
             - containerPort: 3000
           resources:
