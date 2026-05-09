@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-ci-cd-app
+  namespace: default
+  labels:
+    app: sample-ci-cd-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sample-ci-cd-app
+  template:
+    metadata:
+      labels:
+        app: sample-ci-cd-app
+    spec:
+      containers:
+        - name: sample-ci-cd-app
+          image: kattanaresh/sample-ci-cd-app:latest   # ArgoCD will sync this
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-ci-cd-app-svc
+  namespace: default
+spec:
+  selector:
+    app: sample-ci-cd-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: LoadBalancer     # GKE gives you an external IP automatically
