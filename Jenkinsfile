@@ -3,8 +3,8 @@ pipeline {
 
     environment {
         DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')       // Jenkins credential ID
-        DOCKERHUB_USERNAME    = 'nareshkatta97'                       // ← your Docker Hub username
-        IMAGE_NAME            = 'nareshkatta97/sample-ci-cd-app'     // ← image name on Docker Hub
+        DOCKERHUB_USERNAME    = 'kattanaresh'                       // ← your Docker Hub username
+        IMAGE_NAME            = 'kattanaresh/sample-ci-cd-app'     // ← image name on Docker Hub
         IMAGE_TAG             = "v${BUILD_NUMBER}"                    // auto: v1, v2, v3...
     }
 
@@ -61,7 +61,7 @@ pipeline {
     // ── Post Actions (echo only — no sh outside node) ────────────────────
     post {
         success {
-            echo "✅ SUCCESS! Image pushed → hub.docker.com/r/nareshkatta97/sample-ci-cd-app:${IMAGE_TAG}"
+            echo "✅ SUCCESS! Image pushed → hub.docker.com/r/kattanaresh/sample-ci-cd-app:${IMAGE_TAG}"
         }
         failure {
             echo '❌ FAILED — Check the stage logs above.'
