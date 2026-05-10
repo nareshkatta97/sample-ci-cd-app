@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: sample-ci-cd-app
-          image: ghcr.io/nareshkatta97/sample-ci-cd-app:v5
+          image: ghcr.io/nareshkatta97/sample-ci-cd-app:v6
           ports:
             - containerPort: 3000
           resources:
