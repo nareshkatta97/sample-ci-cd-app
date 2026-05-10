@@ -15,13 +15,9 @@ spec:
       labels:
         app: sample-ci-cd-app
     spec:
-      # ── Pull secret for ghcr.io (needed if repo is private) ──────────
-      # imagePullSecrets:
-      #   - name: ghcr-secret    # uncomment if your repo is private
-
       containers:
         - name: sample-ci-cd-app
-          image: ghcr.io/nareshkatta97/sample-ci-cd-app:v2
+          image: ghcr.io/nareshkatta97/sample-ci-cd-app:latest
           ports:
             - containerPort: 3000
           resources:
