@@ -1,88 +1,164 @@
-name: CI Pipeline — Build & Push to ghcr.io
+name: DevSecOps Pipeline — Scan, Build & Push to ghcr.io
 
-# ── Trigger: runs on every push to main branch ───────────────────────────
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
-    branches:
-      - main        # also runs on PRs to main (build only, no push)
+    branches: [ main ]
 
-# ── Permissions: needed to push to ghcr.io ───────────────────────────────
 permissions:
-  contents: write   # to push updated k8s manifest back to repo
-  packages: write   # to push Docker image to ghcr.io
+  contents: write        # push updated k8s manifest
+  packages: write        # push image to ghcr.io
+  security-events: write # publish CodeQL & Trivy results to GitHub Security tab
+  actions: read          # required for CodeQL
 
-# ── Jobs ─────────────────────────────────────────────────────────────────
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  IMAGE_TAG:  v${{ github.run_number }}
+
 jobs:
-  build-and-push:
-    name: Build & Push Docker Image
-    runs-on: ubuntu-latest   # GitHub-hosted runner (free)
 
+  # ── Job 1: Secrets Scan ────────────────────────────────────────────────
+  secrets-scan:
+    name: 🔐 Secrets Scan (Gitleaks)
+    runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history needed for Gitleaks
 
-      # ── Step 1: Checkout source code ─────────────────────────────────
+      - name: Run Gitleaks secrets scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Gitleaks scans entire git history for:
+        # API keys, passwords, tokens, private keys, etc.
+        # Pipeline FAILS if any secrets are found ❌
+
+  # ── Job 2: SAST Scan (CodeQL) ──────────────────────────────────────────
+  sast-scan:
+    name: 🔍 SAST Scan (CodeQL)
+    runs-on: ubuntu-latest
+    needs: secrets-scan    # only runs if secrets scan passes ✅
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── Step 2: Login to GitHub Container Registry ───────────────────
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript   # matches your Node.js app
+          queries: security-extended  # deeper security checks
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+        # CodeQL automatically builds your code for analysis
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript"
+        # Results published to GitHub Security tab → Code scanning alerts
+        # Pipeline FAILS on critical/high severity findings ❌
+
+  # ── Job 3: Build & Push Docker Image ───────────────────────────────────
+  build-and-push:
+    name: 🐳 Build & Push to ghcr.io
+    runs-on: ubuntu-latest
+    needs: [ secrets-scan, sast-scan ]   # only runs if both scans pass ✅
+    outputs:
+      image: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}   # pass image to next job
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Login to ghcr.io
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}           # your GitHub username
-          password: ${{ secrets.GITHUB_TOKEN }}   # auto-provided by GitHub ✅
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Step 3: Extract metadata for image tag ───────────────────────
       - name: Extract image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
-            type=raw,value=v${{ github.run_number }}   # e.g. v1, v2, v3
+            type=raw,value=${{ env.IMAGE_TAG }}
 
-      # ── Step 4: Set up Docker Buildx (multi-platform builder) ────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ── Step 5: Build and push image to ghcr.io ──────────────────────
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}   # only push on push, not PR
+          push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha        # use GitHub Actions cache to speed up builds
+          cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ── Step 6: Update k8s manifest with new image tag ───────────────
-      - name: Update Kubernetes manifest
-        if: github.event_name == 'push'   # only on push to main, not PRs
+  # ── Job 4: Image Scan (Trivy) ──────────────────────────────────────────
+  image-scan:
+    name: 🛡️ Image Scan (Trivy)
+    runs-on: ubuntu-latest
+    needs: build-and-push   # only runs after image is pushed ✅
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: sarif                   # structured format for GitHub Security tab
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH         # only fail on CRITICAL and HIGH
+          exit-code: '1'                  # pipeline FAILS if vulns found ❌
+          ignore-unfixed: true            # ignore vulns with no fix available
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()    # upload even if scan fails — so you can see results
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image-scan
+
+  # ── Job 5: Update K8s Manifest ─────────────────────────────────────────
+  update-manifest:
+    name: 📝 Update K8s Manifest
+    runs-on: ubuntu-latest
+    needs: image-scan       # only runs if image scan passes ✅
+    if: github.event_name == 'push'   # only on push to main, not PRs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Update deployment.yaml with new image tag
         run: |
-          IMAGE_TAG="v${{ github.run_number }}"
-          IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
-
+          IMAGE="${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "Updating deployment.yaml with image: $IMAGE"
-
-          # Replace the image line in deployment.yaml
           sed -i "s|image: ghcr.io.*|image: ${IMAGE}|g" k8s/deployment.yaml
 
-          # Configure git
+      - name: Commit and push updated manifest
+        run: |
           git config user.name  "GitHub Actions"
           git config user.email "actions@github.com"
-
-          # Commit and push if there are changes
           git add k8s/deployment.yaml
-          git diff --staged --quiet || git commit -m "CI: update image to ${IMAGE} [skip ci]"
+          git diff --staged --quiet || \
+            git commit -m "CI: update image to ${{ env.IMAGE_TAG }} [skip ci]"
           git push
-
-      # ── Step 7: Print summary ─────────────────────────────────────────
-      - name: Print image summary
-        run: |
-          echo "### ✅ Image pushed to ghcr.io" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** ghcr.io/${{ github.repository }}:v${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Trigger:** ${{ github.event_name }} by ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
